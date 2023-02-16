@@ -10,6 +10,7 @@
 #include <sys/mman.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdbool.h>
 
 static void debug(char *error)
 {
@@ -47,6 +48,7 @@ static pthread_mutex_t calls_mutex;
 static pthread_mutex_t cond_mutex;
 static pthread_cond_t cond;
 static pthread_t tid;
+static bool cleanup = false;
 
 static int counter_call[5];
 static int counter_wait[5];
@@ -162,8 +164,11 @@ static int put_call(struct call *c)
 	int e;
 	if ((e = pthread_mutex_lock(&calls_mutex)) != 0)
 		handle_error_en(e, "failed to unlock mutex");
-	if (calls.top == 32)
+	if (calls.top == 32) {
+		if ((e = pthread_mutex_unlock(&calls_mutex)) != 0)
+			handle_error_en(e, "failed to unlock mutex");
 		return 1;
+	}
 	calls.top++;
 
 	memcpy(&calls.calls[calls.top], c, sizeof(struct call));
@@ -181,8 +186,11 @@ static int get_call(struct call *c)
 	if ((e = pthread_mutex_lock(&calls_mutex)) != 0)
 		handle_error_en(e, "failed to unlock mutex");
 
-	if (calls.top == 0)
+	if (calls.top == 0) {
+		if ((e = pthread_mutex_unlock(&calls_mutex)) != 0)
+			handle_error_en(e, "failed to unlock mutex");
 		return 1;
+	}
 
 	memcpy(c, &calls.calls[calls.top], sizeof(struct call));
 
@@ -265,11 +273,12 @@ static void init_calls()
 static void clean_calls()
 {
 	int e;
+
 	if ((e = pthread_mutex_destroy(&calls_mutex)) != 0)
-		handle_error_en(e, "failed to destroy mutex");
+		handle_error_en(e, "failed to destroy calls mutex");
 
 	if ((e = pthread_mutex_destroy(&cond_mutex)) != 0)
-		handle_error_en(e, "failed to destroy mutex");
+		handle_error_en(e, "failed to destroy cond mutex");
 
 	if ((e = pthread_cond_destroy(&cond)) != 0)
 		handle_error_en(e, "failed to destroy cond");
@@ -281,7 +290,7 @@ static void *thread_loop(void *arg)
 	struct call call;
 	if ((e = pthread_mutex_lock(&cond_mutex)) != 0)
 		handle_error_en(e, "failed to lock mutex");
-	while (1) {
+	while (!cleanup) {
 		if ((e = pthread_cond_wait(&cond, &cond_mutex)) != 0)
 			handle_error_en(e, "timedwait error");
 		debug("after cond_wait");
@@ -295,6 +304,8 @@ static void *thread_loop(void *arg)
 		}
 		debug("after async_ops");
 	}
+	if ((e = pthread_mutex_unlock(&cond_mutex)) != 0)
+		handle_error_en(e, "failed to unlock mutex");
 	debug("thread loop exited");
 	return NULL;
 }
@@ -323,7 +334,11 @@ __attribute__((constructor(PRIORITY))) static void queuemydata_init(void)
 
 __attribute__((destructor(PRIORITY))) static void queuemydata_cleanup(void)
 {
+	int e;
+	cleanup = true;
+	if ((e = pthread_cond_signal(&cond)) != 0)
+		handle_error_en(e, "failed to signal condition");
 	print_counters();
-	//destroy_thread();
-	//	clean_calls();
+	destroy_thread();
+	clean_calls();
 }
