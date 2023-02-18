@@ -1,3 +1,17 @@
+/*
+* TODO:
+* - when mutex fails, set errno and return appropriate return codes
+* - behave as a lib - never call exit(), unless in debug mode
+* - replace stack with fifo queue
+* - tests
+*
+*
+* Differences from eatmydata:
+* - sync ops get queued and executed asynchronously
+* - files open opened with synchronous flags are respected
+*
+*/
+
 #define _GNU_SOURCE
 #include <sys/types.h>
 #include <unistd.h>
@@ -12,6 +26,16 @@
 #include <string.h>
 #include <stdbool.h>
 
+#define PRIORITY 101
+#define inc(counter, op)                                              \
+   do {                                                               \
+       counter[op]++;                                                 \
+   } while (0)
+
+
+#define inc_call(op) inc(counter_call, op)
+#define inc_wait(op) inc(counter_wait, op)
+#define inc_error(op) inc(counter_error, op)
 static void debug(char *error)
 {
 	FILE *f = fopen("./debug.log", "a");
@@ -27,8 +51,6 @@ static void err(char *error)
 	debug(error);
 	_exit(1);
 }
-
-#define PRIORITY 101
 
 #define handle_error_en(en, msg)                                               \
 	do {                                                                   \
@@ -204,10 +226,10 @@ int fsync(int fd)
 {
 	int e;
 	struct call c = { .fd = fd };
+	inc_call(FSYNC);
 	while ((e = put_call(&c)) != 0)
-		counter_wait[FSYNC]++;
+		inc_wait(FSYNC);
 	errno = 0;
-	counter_call[FSYNC]++;
 	return 0;
 }
 int msync(void *addr, size_t length, int flags)
@@ -216,28 +238,28 @@ int msync(void *addr, size_t length, int flags)
 	struct call c = (struct call){
 		.msync = { .addr = addr, .length = length, .flags = flags }
 	};
+	inc_call(MSYNC);
 	while ((e = put_call(&c)) != 0)
-		counter_wait[MSYNC]++;
+		inc_wait(MSYNC);
 	errno = 0;
-	counter_call[MSYNC]++;
 	return 0;
 }
 void sync(void)
 {
 	int e;
 	struct call c = { 0 };
+	inc_call(SYNC);
 	while ((e = put_call(&c)) != 0)
-		counter_wait[SYNC]++;
-	counter_call[SYNC]++;
+		inc_wait(SYNC);
 	errno = 0;
 }
 int fdatasync(int fd)
 {
 	int e;
 	struct call c = { .fd = fd };
+	inc_call(FDATASYNC);
 	while ((e = put_call(&c)) != 0)
-		counter_wait[FDATASYNC]++;
-	counter_call[FDATASYNC]++;
+		inc_wait(FDATASYNC);
 	errno = 0;
 	return 0;
 }
@@ -250,9 +272,9 @@ int sync_file_range(int fd, off64_t offset, off64_t nbytes, unsigned int flags)
 					       .nbytes = nbytes,
 					       .flags = flags,
 				       } };
+	inc_call(SYNC_FILE_RANGE);
 	while ((e = put_call(&c)) != 0)
-		counter_wait[SYNC_FILE_RANGE]++;
-	counter_call[SYNC_FILE_RANGE]++;
+		inc_wait(SYNC_FILE_RANGE);
 	errno = 0;
 	return 0;
 }
@@ -299,7 +321,7 @@ static void *thread_loop(void *arg)
 		while (get_call(&call) == 0) {
 			/* track errors  */
 			if ((e = async_ops(&call)) != 0) {
-				counter_error[call.op]++;
+				inc_error(call.op);
 			}
 		}
 		debug("after async_ops");
