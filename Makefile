@@ -1,14 +1,18 @@
-CFLAGS       = -fPIC -g -pedantic -Wextra -g
+CFLAGS       = -fPIC -g -pedantic -Wextra
 LDFLAGS      = -shared -pthread
+DEBUG        = -g -D=DEBUG
 LDPRELOAD = LD_PRELOAD=./libqueuemydata.so
 TEST = sync; cat counters.log debug.log
 BIN = libqueuemydata.so
 SRC = src/queuemydata.c
 
 .PHONY: all
-all: shared
+all: shared-debug
 
-.PHONY: shared
+.PHONY: shared-debug
+shared-debug:
+	gcc -o $(BIN) $(SRC) $(CFLAGS) $(LDFLAGS) $(DEBUG)
+
 shared:
 	gcc -o $(BIN) $(SRC) $(CFLAGS) $(LDFLAGS)
 
@@ -17,9 +21,8 @@ clean:
 	rm libqueuemydata.so counters.log debug.log
 
 .PHONY: test
-test: shared
+test: shared-debug
 	$(LDPRELOAD) $(TEST)
-
 
 .PHONY: fmt
 fmt:
@@ -31,6 +34,7 @@ test-valgrind: all
 		--leak-check=full                      \
 		--track-origins=yes                    \
 		--exit-on-first-error=yes              \
+		--show-leak-kinds=all                  \
 		$(TEST)
 
 .PHONY: test-asan
